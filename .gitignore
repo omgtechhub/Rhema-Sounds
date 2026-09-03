@@ -1,0 +1,33 @@
+# Environment folder & sensitive configuration
+env/
+.env
+*.env
+
+# User uploaded files
+uploads/*
+!uploads/audio/.gitkeep
+!uploads/avatars/.gitkeep
+!uploads/thumbs/.gitkeep
+
+# Operating System files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs, temporary, scratch and audit files
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+scratch/
+audits/
+audit/
+node_modules/
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.suo
+*.user
