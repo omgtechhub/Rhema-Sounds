@@ -27,6 +27,9 @@ define('DB_USER',    $envVars['DB_USER']    ?? getenv('DB_USER')    ?: 'root');
 define('DB_PASS',    $envVars['DB_PASS']    ?? getenv('DB_PASS')    ?: '');
 define('DB_CHARSET', 'utf8mb4');
 
+// ---- Image compression pipeline (shared by avatars & thumbnails) ----
+require_once __DIR__ . '/imagecompress.php';
+
 // ---- File paths ----
 define('AUDIO_DIR',  __DIR__ . '/uploads/audio/');
 define('THUMB_DIR',  __DIR__ . '/uploads/thumbs/');
@@ -47,7 +50,10 @@ define('MAX_UPLOAD_MB', 50);
 
 // ---- Custom thumbnail image upload limits ----
 define('ALLOWED_IMAGE_MIME', ['image/jpeg','image/png','image/webp','image/gif']);
-define('MAX_THUMB_MB', 5);
+// Ceiling on the *incoming* file only. Everything is re-encoded and
+// downscaled on arrival (see imagecompress.php), so a straight-from-the-
+// phone photo is accepted and lands on disk at a few dozen KB.
+define('MAX_THUMB_MB', 12);
 
 // ---- Roles & content moderation ----
 const VALID_ROLES      = ['listener', 'creator'];
@@ -55,7 +61,7 @@ const VALID_USER_STATUSES = ['active', 'suspended'];
 const CONTENT_STATUSES = ['approved', 'pending', 'rejected'];
 
 // ---- Create required directories ----
-foreach ([AUDIO_DIR, THUMB_DIR] as $dir) {
+foreach ([AUDIO_DIR, THUMB_DIR, AVATAR_DIR] as $dir) {
     if (!is_dir($dir)) mkdir($dir, 0755, true);
 }
 
@@ -644,22 +650,31 @@ function getCustomThumbnailPath(int $trackId): string {
 }
 
 function deleteCustomThumbnail(int $trackId): void {
-    foreach (CUSTOM_THUMB_EXTS as $ext) {
-        $p = THUMB_DIR . $trackId . '_custom.' . $ext;
-        if (file_exists($p)) unlink($p);
-    }
+    // Clears the primary plus every generated variant (@md / @sm).
+    imgDeleteVariants(THUMB_DIR, $trackId . '_custom');
 }
 
+// Accepts an uploaded cover image and stores a compressed WebP (or
+// JPEG/PNG fallback) set instead of the original: a 640px primary for
+// the now-playing art plus 256px and 96px variants for cards and rows.
 function saveCustomThumbnail(int $trackId, array $file): bool {
     if ($file['error'] !== UPLOAD_ERR_OK) return false;
     if ($file['size'] > MAX_THUMB_MB * 1024 * 1024) return false;
 
-    $mime   = mime_content_type($file['tmp_name']);
-    $extMap = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'];
-    if (!in_array($mime, ALLOWED_IMAGE_MIME) || empty($extMap[$mime])) return false;
+    // Validate against the real file header, not the submitted name.
+    $mime = mime_content_type($file['tmp_name']);
+    if (!in_array($mime, ALLOWED_IMAGE_MIME, true)) return false;
+    if (!imgProbe($file['tmp_name'])) return false;
 
-    deleteCustomThumbnail($trackId); // remove any previous custom thumbnail (any extension)
-    return move_uploaded_file($file['tmp_name'], THUMB_DIR . $trackId . '_custom.' . $extMap[$mime]);
+    $res = imgCompressTo($file['tmp_name'], THUMB_DIR, $trackId . '_custom', 'thumb', true);
+    if ($res['ok']) @unlink($file['tmp_name']);
+    return $res['ok'];
+}
+
+// Resolves the stored cover at the requested variant, building it on
+// demand for images that predate the compression pipeline.
+function getCustomThumbnailVariant(int $trackId, string $suffix): string {
+    return imgEnsureVariant(THUMB_DIR, $trackId . '_custom', $suffix, 'thumb', true);
 }
 
 function getThumbnailPath(int $trackId): string {
@@ -977,25 +992,35 @@ function getAvatarPath(int $userId): string {
 }
 
 function deleteAvatar(int $userId): void {
-    foreach (AVATAR_EXTS as $ext) {
-        $p = AVATAR_DIR . $userId . '.' . $ext;
-        if (file_exists($p)) unlink($p);
-    }
+    // Clears the primary plus every generated variant (@md / @sm).
+    imgDeleteVariants(AVATAR_DIR, (string)$userId);
 }
 
+// Avatars are always rendered in a circle with object-fit:cover, so the
+// upload is centre-cropped square and stored at 320/128/64px. A 5 MB
+// selfie becomes a ~2 KB file in the 32px nav slot.
 function saveAvatar(int $userId, array $file): bool {
     if ($file['error'] !== UPLOAD_ERR_OK) return false;
     if ($file['size'] > MAX_THUMB_MB * 1024 * 1024) return false;
 
-    $mime   = mime_content_type($file['tmp_name']);
-    $extMap = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'];
-    if (!in_array($mime, ALLOWED_IMAGE_MIME) || empty($extMap[$mime])) return false;
+    // Validate against the real file header, not the submitted name.
+    $mime = mime_content_type($file['tmp_name']);
+    if (!in_array($mime, ALLOWED_IMAGE_MIME, true)) return false;
+    if (!imgProbe($file['tmp_name'])) return false;
 
-    deleteAvatar($userId);
-    if (!move_uploaded_file($file['tmp_name'], AVATAR_DIR . $userId . '.' . $extMap[$mime])) return false;
+    $res = imgCompressTo($file['tmp_name'], AVATAR_DIR, (string)$userId, 'avatar', true);
+    if (!$res['ok']) return false;
+    @unlink($file['tmp_name']);
 
-    updateUser($userId, ['avatar' => $userId . '.' . $extMap[$mime]]);
+    // Store the basename so decorateUser() can cache-bust on mtime.
+    updateUser($userId, ['avatar' => basename($res['primary'])]);
     return true;
+}
+
+// Resolves the stored avatar at the requested variant, building it on
+// demand for images that predate the compression pipeline.
+function getAvatarVariant(int $userId, string $suffix): string {
+    return imgEnsureVariant(AVATAR_DIR, (string)$userId, $suffix, 'avatar', true);
 }
 
 // ---- Liked tracks ----

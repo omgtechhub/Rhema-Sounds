@@ -39,6 +39,9 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- Shrinks picked images in the browser before upload; the server
+       re-compresses authoritatively in imagecompress.php -->
+  <script src="js/image-compressor.js" defer></script>
   <style>
     :root {
       --green: #1db954;
@@ -1129,7 +1132,7 @@ function artistAvatarHtml(a, size, fontSize, marginBottom, shadow) {
   const mb = marginBottom || 0;
   const shadowCss = shadow ? 'box-shadow:0 4px 16px rgba(0,0,0,0.4);' : '';
   const imgPart = a.avatar
-    ? `<img src="${a.avatar}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.style.display='none'">`
+    ? `<img src="${a.avatar}${size > 160 ? '' : '&size=md'}" alt="" loading="lazy" decoding="async" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.style.display='none'">`
     : '';
   return `<div style="position:relative;overflow:hidden;width:${size}px;height:${size}px;border-radius:50%;background:${a.color};margin:0 auto ${mb}px;display:flex;align-items:center;justify-content:center;font-size:${fontSize};${shadowCss}">${a.emoji}${imgPart}</div>`;
 }
@@ -1527,9 +1530,9 @@ function trackCard(t) {
   return `
     <div class="card ${isPlaying ? 'playing' : ''}" data-track-id="${t.id}" onclick="playTrack(${t.id})" oncontextmenu="showContextMenu(event,${t.id})">
       <div class="card-img" style="background:${t.color||'#1a3a2a'}20;border:1px solid ${t.color||'#1a3a2a'}30;padding:0;overflow:hidden;">
-        <img src="api.php?action=thumbnail&id=${t.id}"
+        <img src="api.php?action=thumbnail&id=${t.id}&size=md"
              style="width:100%;height:100%;object-fit:cover;border-radius:6px;"
-             alt="${t.title}"
+             alt="${t.title}" loading="lazy" decoding="async"
              onerror="this.replaceWith(Object.assign(document.createElement('span'),{style:'font-size:3rem;display:flex;align-items:center;justify-content:center;width:100%;height:100%;',textContent:'${fallback}'}))"/>
         ${isPlaying ? `<div class="card-now-playing-badge"><div class="eq-bars${eqClass}"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div></div>` : ''}
         <button class="card-play-overlay" onclick="event.stopPropagation();playTrack(${t.id})"><i class="fas fa-play" style="margin-left:2px;"></i></button>
@@ -1658,9 +1661,9 @@ function trackRow(t, i) {
         ${isPlaying ? `<div class="eq-bars${eqClass}"><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div><div class="eq-bar"></div></div>` : (i+1)}
       </div>
       <div class="track-thumb" style="overflow:hidden;">
-        <img src="api.php?action=thumbnail&id=${t.id}"
+        <img src="api.php?action=thumbnail&id=${t.id}&size=sm"
              style="width:100%;height:100%;object-fit:cover;border-radius:4px;"
-             alt="${t.title}"
+             alt="${t.title}" loading="lazy" decoding="async"
              onerror="this.replaceWith(Object.assign(document.createElement('span'),{style:'font-size:1.2rem;',textContent:'${fallback}'}))"/>
       </div>
       <div class="track-info">
@@ -2380,7 +2383,7 @@ function playTrack(id) {
   // --- Player bar thumbnail ---
   const thumbEl = document.getElementById('player-thumb');
   thumbEl.style.background = (t.color||'#1a3a2a') + '30';
-  thumbEl.innerHTML = `<img src="api.php?action=thumbnail&id=${t.id}"
+  thumbEl.innerHTML = `<img src="api.php?action=thumbnail&id=${t.id}&size=sm" decoding="async"
       style="width:100%;height:100%;object-fit:cover;border-radius:6px;"
       onerror="this.replaceWith(Object.assign(document.createElement('span'),{style:'font-size:1.4rem;',textContent:'${t.emoji||'🎵'}'}))"/>`;
 
@@ -2391,7 +2394,7 @@ function playTrack(id) {
   // --- Now playing page ---
   const npArt = document.getElementById('np-album-art');
   npArt.style.background = (t.color||'#1a3a2a') + '30';
-  npArt.innerHTML = `<img src="api.php?action=thumbnail&id=${t.id}"
+  npArt.innerHTML = `<img src="api.php?action=thumbnail&id=${t.id}" decoding="async"
       style="width:100%;height:100%;object-fit:cover;border-radius:16px;"
       onerror="this.replaceWith(Object.assign(document.createElement('span'),{style:'font-size:6rem;',textContent:'${t.emoji||'🎵'}'}))"/>`;
 
@@ -2405,7 +2408,7 @@ function playTrack(id) {
   const npmArt = document.getElementById('npm-album-art');
   if (npmArt) {
     npmArt.style.background = (t.color||'#1a3a2a') + '30';
-    npmArt.innerHTML = `<img src="api.php?action=thumbnail&id=${t.id}"
+    npmArt.innerHTML = `<img src="api.php?action=thumbnail&id=${t.id}" decoding="async"
         style="width:100%;height:100%;object-fit:cover;border-radius:16px;"
         onerror="this.replaceWith(Object.assign(document.createElement('span'),{style:'font-size:5rem;',textContent:'${t.emoji||'🎵'}'}))"/>`;
     document.getElementById('npm-title').textContent  = t.title;
@@ -2596,7 +2599,7 @@ function updateQueuePanel() {
     now.innerHTML = `
       <div class="track-row" style="background:#2a2a2a;border-radius:6px;">
         <div class="track-thumb" style="overflow:hidden;">
-          <img src="api.php?action=thumbnail&id=${t.id}" style="width:100%;height:100%;object-fit:cover;border-radius:4px;"
+          <img src="api.php?action=thumbnail&id=${t.id}&size=sm" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;border-radius:4px;"
                onerror="this.replaceWith(Object.assign(document.createElement('span'),{style:'font-size:1.2rem;',textContent:'${t.emoji||'🎵'}'}))"/>
         </div>
         <div class="track-info">
@@ -2609,7 +2612,7 @@ function updateQueuePanel() {
   list.innerHTML = upcoming.map(t => `
     <div class="track-row" onclick="playTrack(${t.id})">
       <div class="track-thumb" style="overflow:hidden;">
-        <img src="api.php?action=thumbnail&id=${t.id}" style="width:100%;height:100%;object-fit:cover;border-radius:4px;"
+        <img src="api.php?action=thumbnail&id=${t.id}&size=sm" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;border-radius:4px;"
              onerror="this.replaceWith(Object.assign(document.createElement('span'),{style:'font-size:1.2rem;',textContent:'${t.emoji||'🎵'}'}))"/>
       </div>
       <div class="track-info">
@@ -2625,7 +2628,7 @@ function renderUpNext() {
   document.getElementById('up-next-list').innerHTML = upcoming.map(t => `
     <div class="track-row" onclick="playTrack(${t.id})">
       <div class="track-thumb" style="overflow:hidden;">
-        <img src="api.php?action=thumbnail&id=${t.id}" style="width:100%;height:100%;object-fit:cover;border-radius:4px;"
+        <img src="api.php?action=thumbnail&id=${t.id}&size=sm" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;border-radius:4px;"
              onerror="this.replaceWith(Object.assign(document.createElement('span'),{style:'font-size:1.2rem;',textContent:'${t.emoji||'🎵'}'}))"/>
       </div>
       <div class="track-info">
@@ -3625,7 +3628,11 @@ async function saveProfile() {
   const fd = new FormData();
   fd.set('name', name);
   const fileInput = document.getElementById('profile-avatar-input');
-  if (fileInput.files[0]) fd.set('avatar', fileInput.files[0]);
+  if (fileInput.files[0]) {
+    // Downscale first so a camera original is not a multi-megabyte POST.
+    const picked = fileInput.files[0];
+    fd.set('avatar', window.RhemaImage ? await RhemaImage.compress(picked, 'avatar') : picked);
+  }
 
   try {
     const res = await fetch('api.php?action=update_profile', { method: 'POST', body: fd });

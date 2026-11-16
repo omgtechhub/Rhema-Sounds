@@ -267,6 +267,9 @@ a:hover{text-decoration:underline;}
     </div>
   </div>
 </div>
+<!-- Shrinks picked images in the browser before upload; the server
+     re-compresses authoritatively in imagecompress.php -->
+<script src="js/image-compressor.js"></script>
 <script>
 function becomeCreator(btn) {
   btn.disabled = true;
@@ -844,11 +847,13 @@ function profileAvatarSelected(input) {
   const url = URL.createObjectURL(f);
   document.getElementById('profile-avatar-preview').innerHTML = '<img src="' + url + '" style="width:100%;height:100%;object-fit:cover;"/>';
 }
-function saveProfile() {
+async function saveProfile() {
   const fd = new FormData();
   fd.append('creator_name', document.getElementById('profile-creator-name').value.trim());
   fd.append('bio', document.getElementById('profile-bio').value.trim());
-  if (profileAvatarFile) fd.append('avatar', profileAvatarFile);
+  // Downscale first so a camera original is not a multi-megabyte POST.
+  if (profileAvatarFile) fd.append('avatar',
+    window.RhemaImage ? await RhemaImage.compress(profileAvatarFile, 'avatar') : profileAvatarFile);
   fetch('api.php?action=update_profile', { method: 'POST', body: fd })
     .then(r => r.json())
     .then(d => {
@@ -921,7 +926,7 @@ function setAudioFile(f) {
 }
 
 // ---- Upload (creator track) ----
-function uploadMyTrack() {
+async function uploadMyTrack() {
   if (!selectedFile) { toast('Please select an audio file first.', true); return; }
   const title  = document.getElementById('up-title').value.trim();
   const artist = document.getElementById('up-artist').value.trim();
@@ -937,7 +942,10 @@ function uploadMyTrack() {
   fd.append('color',           document.getElementById('up-color').value);
   fd.append('lyrics',          document.getElementById('up-lyrics').value.trim());
   fd.append('client_duration', detectedDuration);
-  if (selectedThumbFile) fd.append('thumbnail', selectedThumbFile);
+  // Cover art is downscaled here so it never competes with the audio
+  // file for the creator's upload bandwidth.
+  if (selectedThumbFile) fd.append('thumbnail',
+    window.RhemaImage ? await RhemaImage.compress(selectedThumbFile, 'thumb') : selectedThumbFile);
 
   const btn = document.getElementById('upload-btn');
   btn.disabled = true;
@@ -1067,7 +1075,7 @@ function removeTrackEditThumbnail() {
   document.getElementById('track-edit-remove-thumbnail').value = '1';
   document.getElementById('track-edit-thumb-preview').innerHTML = '<i class="fas fa-image" style="color:var(--muted);"></i>';
 }
-function saveTrackEdit() {
+async function saveTrackEdit() {
   const id = document.getElementById('track-edit-id').value;
   const fd = new FormData();
   fd.append('title',  document.getElementById('track-edit-title').value);
@@ -1076,7 +1084,8 @@ function saveTrackEdit() {
   fd.append('genre',  document.getElementById('track-edit-genre').value);
   fd.append('color',  document.getElementById('track-edit-color').value);
   fd.append('lyrics', document.getElementById('track-edit-lyrics').value);
-  if (trackEditThumbFile) fd.append('thumbnail', trackEditThumbFile);
+  if (trackEditThumbFile) fd.append('thumbnail',
+    window.RhemaImage ? await RhemaImage.compress(trackEditThumbFile, 'thumb') : trackEditThumbFile);
   else if (document.getElementById('track-edit-remove-thumbnail').value === '1') fd.append('remove_thumbnail', '1');
   fetch('api.php?action=creator_update_track&id=' + id, { method: 'POST', body: fd })
     .then(r => r.json())

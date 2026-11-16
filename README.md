@@ -89,3 +89,50 @@ A `.htaccess` in the `data/` directory denies direct HTTP access (created automa
 | Audio won't play | Check file permissions on `uploads/audio/` (must be readable by web server) |
 | Upload fails | Check `upload_max_filesize` and `post_max_size` in `php.ini` — set to at least 60MB |
 | 404 on stream.php | Make sure all files are in the same directory |
+
+---
+
+## Image Compression
+
+Profile photos and track cover art are compressed automatically. Originals
+are never stored, so a straight-from-the-phone photo no longer gets served
+into a 40px list row.
+
+### How it works
+
+| Stage | File | What happens |
+|-------|------|--------------|
+| 1. Browser | `js/image-compressor.js` | The picked image is downscaled and re-encoded to WebP before upload, so a creator on mobile data sends ~100 KB instead of 8 MB. Fails soft: on any error the original is uploaded and the server still handles it. |
+| 2. Server | `imagecompress.php` | Auto-orients (EXIF), centre-crops to square, downscales and re-encodes to WebP (JPEG/PNG fallback), then writes a `@md` and `@sm` variant alongside. |
+| 3. Serving | `api.php` | `?size=sm` / `?size=md` return the variant that matches the slot being painted. Responses carry an ETag, so repeat views cost a 304 with no body. |
+
+### Sizes
+
+| Kind | Primary | `@md` | `@sm` | Used by |
+|------|---------|-------|-------|---------|
+| Track cover | 640px | 256px | 96px | now-playing art / grid cards / track rows |
+| Avatar | 320px | 128px | 64px | profile page / artist circles / nav |
+
+Typical result: a 5 MB upload lands at ~50 KB, and a track row pulls ~4 KB
+instead of the full original.
+
+### Requirements
+
+GD with WebP support (`gd` is already required for thumbnail generation).
+Without GD the upload still succeeds, it is just stored uncompressed.
+Without WebP support the pipeline falls back to JPEG/PNG automatically.
+
+### Backfilling images uploaded before this existed
+
+```bash
+php compress-images.php --dry-run   # report what would change
+php compress-images.php             # apply
+```
+
+Safe to re-run: anything already at target size is skipped. It also updates
+`users.avatar` when a file changes extension. The same script can be opened
+in a browser while logged in as admin.
+
+Images from before the pipeline also gain their `@md`/`@sm` variants lazily
+on first request, so running the script is an optimisation, not a migration
+you must perform.

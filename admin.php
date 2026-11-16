@@ -1064,6 +1064,9 @@ a:hover{text-decoration:underline;}
 
 <?php endif; // loggedIn ?>
 
+<!-- Shrinks picked images in the browser before upload; the server
+     re-compresses authoritatively in imagecompress.php -->
+<script src="js/image-compressor.js"></script>
 <script>
 // ---- Tab switching ----
 function switchTab(name, el) {
@@ -1164,7 +1167,7 @@ function setAudioFile(f) {
 }
 
 // ---- Upload ----
-function uploadTrack() {
+async function uploadTrack() {
   if (!selectedFile) { toast('Please select an audio file first.', true); return; }
   const title  = document.getElementById('up-title').value.trim();
   const artist = document.getElementById('up-artist').value.trim();
@@ -1180,7 +1183,10 @@ function uploadTrack() {
   fd.append('color',           document.getElementById('up-color').value);
   fd.append('lyrics',          document.getElementById('up-lyrics').value.trim());
   fd.append('client_duration', detectedDuration); // browser-detected fallback
-  if (selectedThumbFile) fd.append('thumbnail', selectedThumbFile);
+  // Cover art is downscaled here so it never competes with the audio
+  // file for the admin's upload bandwidth.
+  if (selectedThumbFile) fd.append('thumbnail',
+    window.RhemaImage ? await RhemaImage.compress(selectedThumbFile, 'thumb') : selectedThumbFile);
 
   const btn = document.getElementById('upload-btn');
   btn.disabled = true;
@@ -1387,7 +1393,7 @@ function removeEditThumbnail() {
   document.getElementById('edit-remove-thumbnail').value = '1';
   document.getElementById('edit-thumb-preview').innerHTML = '<i class="fas fa-image" style="color:var(--muted);"></i>';
 }
-function saveEdit() {
+async function saveEdit() {
   const id = document.getElementById('edit-id').value;
   const fd = new FormData();
   fd.append('title',  document.getElementById('edit-title').value);
@@ -1396,7 +1402,8 @@ function saveEdit() {
   fd.append('genre',  document.getElementById('edit-genre').value);
   fd.append('color',  document.getElementById('edit-color').value);
   fd.append('lyrics', document.getElementById('edit-lyrics').value);
-  if (editThumbFile) fd.append('thumbnail', editThumbFile);
+  if (editThumbFile) fd.append('thumbnail',
+    window.RhemaImage ? await RhemaImage.compress(editThumbFile, 'thumb') : editThumbFile);
   else if (document.getElementById('edit-remove-thumbnail').value === '1') fd.append('remove_thumbnail', '1');
   fetch('api.php?action=update_track&id=' + id, { method: 'POST', body: fd })
     .then(r => r.json())

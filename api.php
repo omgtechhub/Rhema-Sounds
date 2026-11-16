@@ -67,6 +67,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(204); exit; }
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 $method = $_SERVER['REQUEST_METHOD'];
 
+// ---- Helper: send a stored image with full cache validation -------
+// Images are immutable once their URL carries a ?v= fingerprint, so
+// repeat views are served from the browser cache and a revalidation
+// costs a 304 with no body instead of re-sending the file.
+function serveImageFile(string $path): void {
+    $ext   = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+    $mimes = ['svg' => 'image/svg+xml', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg',
+              'png' => 'image/png', 'webp' => 'image/webp', 'gif' => 'image/gif'];
+
+    $mtime = (int)@filemtime($path);
+    $bytes = (int)@filesize($path);
+    $etag  = '"' . md5(basename($path) . '|' . $mtime . '|' . $bytes) . '"';
+
+    header('Content-Type: ' . ($mimes[$ext] ?? 'image/jpeg'));
+    header('ETag: ' . $etag);
+    header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $mtime) . ' GMT');
+    header('X-Content-Type-Options: nosniff');
+
+    // A fingerprinted URL can be cached hard; an unversioned one must
+    // stay revalidatable so a replaced cover is not stuck for a year.
+    header(isset($_GET['v'])
+        ? 'Cache-Control: public, max-age=31536000, immutable'
+        : 'Cache-Control: public, max-age=86400, stale-while-revalidate=604800');
+
+    $ifNoneMatch     = trim((string)($_SERVER['HTTP_IF_NONE_MATCH'] ?? ''));
+    $ifModifiedSince = (string)($_SERVER['HTTP_IF_MODIFIED_SINCE'] ?? '');
+    if (($ifNoneMatch !== '' && $ifNoneMatch === $etag)
+        || ($ifModifiedSince !== '' && @strtotime($ifModifiedSince) >= $mtime && $mtime > 0)) {
+        http_response_code(304);
+        exit;
+    }
+
+    header('Content-Length: ' . $bytes);
+    readfile($path);
+    exit;
+}
+
+// Fingerprint for a track's cover art, so the URL changes when the
+// cover does and browsers pick the new one up immediately.
+function thumbVersion(int $id): string {
+    $p = getThumbnailPath($id);
+    return $p ? (string)@filemtime($p) : '0';
+}
+
+function avatarVersion(int $userId): string {
+    $p = getAvatarPath($userId);
+    return $p ? (string)@filemtime($p) : '0';
+}
+
 // ---- Helper: attach creator profile info (name + avatar) to a content row ----
 function decorateCreatorInfo(array $row): array {
     if (!empty($row['creator_id'])) {
@@ -74,7 +123,7 @@ function decorateCreatorInfo(array $row): array {
         if ($creator) {
             $row['creator_name']   = $creator['creator_name'] ?: $creator['name'];
             $row['creator_avatar'] = !empty($creator['avatar'])
-                ? ('api.php?action=avatar&id=' . $creator['id'])
+                ? ('api.php?action=avatar&id=' . $creator['id'] . '&v=' . avatarVersion((int)$creator['id']))
                 : '';
         }
     }
@@ -84,7 +133,9 @@ function decorateCreatorInfo(array $row): array {
 // ---- Helper: attach stream/thumbnail URLs (and creator info) to a track row ----
 function decorateTrack(array $t): array {
     $t['src']       = 'stream.php?id=' . $t['id'];
-    $t['thumbnail'] = 'api.php?action=thumbnail&id=' . $t['id'];
+    // Clients append &size=sm|md to pull the variant that matches the
+    // slot they are painting; omitting it yields the full-size art.
+    $t['thumbnail'] = 'api.php?action=thumbnail&id=' . $t['id'] . '&v=' . thumbVersion((int)$t['id']);
     return decorateCreatorInfo($t);
 }
 
@@ -115,28 +166,33 @@ if ($action === 'search' && $method === 'GET') {
 }
 
 if ($action === 'thumbnail' && $method === 'GET') {
-    $id   = (int)($_GET['id'] ?? 0);
-    $path = getThumbnailPath($id);
+    $id     = (int)($_GET['id'] ?? 0);
+    $suffix = imgSizeSuffix($_GET['size'] ?? '');   // '' | '@md' | '@sm'
+    $path   = '';
 
-    // Generate on-the-fly if missing
-    if (!$path && $id > 0) {
-        $t = getTrackById($id);
-        if ($t) {
-            $path = generateThumbnail($id, $t['title'], $t['artist'], $t['color'] ?? '');
+    if ($id > 0) {
+        // 1. A creator-uploaded cover, at the requested size.
+        $path = getCustomThumbnailVariant($id, $suffix);
+
+        // 2. Otherwise the auto-generated colour art, downscaled on
+        //    demand so legacy tracks also get small variants.
+        if (!$path) $path = imgEnsureVariant(THUMB_DIR, (string)$id, $suffix, 'thumb', true);
+
+        // 3. Anything already on disk we cannot resize (the SVG fallback).
+        if (!$path) $path = getThumbnailPath($id);
+
+        // 4. Nothing yet - generate the colour art, then size it.
+        if (!$path) {
+            $t = getTrackById($id);
+            if ($t) {
+                generateThumbnail($id, $t['title'], $t['artist'], $t['color'] ?? '');
+                $path = imgEnsureVariant(THUMB_DIR, (string)$id, $suffix, 'thumb', true)
+                     ?: getThumbnailPath($id);
+            }
         }
     }
 
-    if ($path && file_exists($path)) {
-        $ext      = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        $extMimes = ['svg' => 'image/svg+xml', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg',
-                     'png' => 'image/png', 'webp' => 'image/webp', 'gif' => 'image/gif'];
-        $mime     = $extMimes[$ext] ?? 'image/jpeg';
-        header('Content-Type: ' . $mime);
-        header('Cache-Control: public, max-age=86400');
-        header('Content-Length: ' . filesize($path));
-        readfile($path);
-        exit;
-    }
+    if ($path && file_exists($path)) serveImageFile($path);
 
     // Ultimate fallback: inline SVG (no file I/O needed)
     $color = trackColor($id);
@@ -197,19 +253,14 @@ if ($action === 'settings' && $method === 'GET') {
 // ============================================================
 
 if ($action === 'avatar' && $method === 'GET') {
-    $id   = (int)($_GET['id'] ?? 0);
-    $path = $id > 0 ? getAvatarPath($id) : '';
+    $id     = (int)($_GET['id'] ?? 0);
+    $suffix = imgSizeSuffix($_GET['size'] ?? '');   // '' | '@md' | '@sm'
+    // Builds the variant on demand for avatars uploaded before the
+    // compression pipeline existed; falls back to the stored primary.
+    $path   = $id > 0 ? getAvatarVariant($id, $suffix) : '';
+    if (!$path && $id > 0) $path = getAvatarPath($id);
 
-    if ($path && file_exists($path)) {
-        $ext      = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        $extMimes = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
-                     'webp' => 'image/webp', 'gif' => 'image/gif'];
-        header('Content-Type: ' . ($extMimes[$ext] ?? 'image/jpeg'));
-        header('Cache-Control: public, max-age=86400');
-        header('Content-Length: ' . filesize($path));
-        readfile($path);
-        exit;
-    }
+    if ($path && file_exists($path)) serveImageFile($path);
 
     header('Content-Type: image/svg+xml');
     header('Cache-Control: public, max-age=3600');
